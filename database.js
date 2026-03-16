@@ -1,6 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs'); // заменили на bcryptjs
 
 const dbPath = path.resolve(__dirname, 'darkness.db');
 const db = new sqlite3.Database(dbPath);
@@ -18,7 +18,7 @@ db.serialize(() => {
     )
   `);
 
-  // Личные сообщения
+  // Личные сообщения с полем read
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,11 +27,15 @@ db.serialize(() => {
       text TEXT,
       mediaUrl TEXT,
       type TEXT DEFAULT 'text',
+      read INTEGER DEFAULT 0,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(fromUserId) REFERENCES users(id),
       FOREIGN KEY(toUserId) REFERENCES users(id)
     )
   `);
+  // Индекс для ускорения получения чатов
+  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_users ON messages(fromUserId, toUserId)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)`);
 
   // Группы
   db.run(`
@@ -135,11 +139,11 @@ const updateUserProfile = (userId, { bio, avatar }) => {
 const saveMessage = (fromUserId, toUserId, text, mediaUrl, type) => {
   return new Promise((resolve, reject) => {
     db.run(
-      'INSERT INTO messages (fromUserId, toUserId, text, mediaUrl, type) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO messages (fromUserId, toUserId, text, mediaUrl, type, read) VALUES (?, ?, ?, ?, ?, 0)',
       [fromUserId, toUserId, text, mediaUrl, type],
       function(err) {
         if (err) reject(err);
-        else resolve({ id: this.lastID, fromUserId, toUserId, text, mediaUrl, type, timestamp: new Date() });
+        else resolve({ id: this.lastID, fromUserId, toUserId, text, mediaUrl, type, read: 0, timestamp: new Date() });
       }
     );
   });
@@ -155,6 +159,88 @@ const getMessagesBetweenUsers = (user1Id, user2Id) => {
       (err, rows) => {
         if (err) reject(err);
         else resolve(rows);
+      }
+    );
+  });
+};
+
+// Получить список чатов (личных диалогов) пользователя
+const getChats = (userId) => {
+  return new Promise((resolve, reject) => {
+    // Находим всех собеседников, с которыми есть переписка
+    db.all(
+      `SELECT DISTINCT 
+         CASE WHEN fromUserId = ? THEN toUserId ELSE fromUserId END AS otherUserId
+       FROM messages 
+       WHERE fromUserId = ? OR toUserId = ?`,
+      [userId, userId, userId],
+      (err, rows) => {
+        if (err) return reject(err);
+        const otherUserIds = rows.map(r => r.otherUserId);
+        if (otherUserIds.length === 0) return resolve([]);
+
+        // Для каждого собеседника получим последнее сообщение и количество непрочитанных
+        const promises = otherUserIds.map(otherId => {
+          return Promise.all([
+            // последнее сообщение
+            new Promise((res, rej) => {
+              db.get(
+                `SELECT * FROM messages 
+                 WHERE (fromUserId = ? AND toUserId = ?) OR (fromUserId = ? AND toUserId = ?)
+                 ORDER BY timestamp DESC LIMIT 1`,
+                [userId, otherId, otherId, userId],
+                (err, msg) => {
+                  if (err) rej(err);
+                  else res(msg);
+                }
+              );
+            }),
+            // количество непрочитанных сообщений от этого собеседника к userId
+            new Promise((res, rej) => {
+              db.get(
+                `SELECT COUNT(*) as cnt FROM messages 
+                 WHERE fromUserId = ? AND toUserId = ? AND read = 0`,
+                [otherId, userId],
+                (err, row) => {
+                  if (err) rej(err);
+                  else res(row ? row.cnt : 0);
+                }
+              );
+            }),
+            // информация о собеседнике
+            findUserById(otherId)
+          ]);
+        });
+
+        Promise.all(promises)
+          .then(results => {
+            const chats = results.map(([lastMsg, unreadCount, otherUser]) => ({
+              userId: otherUser.id,
+              username: otherUser.username,
+              avatar: otherUser.avatar,
+              lastMessage: lastMsg ? (lastMsg.text || (lastMsg.mediaUrl ? (lastMsg.type === 'image' ? '📷 Фото' : lastMsg.type === 'video' ? '🎥 Видео' : '📹 Кружок') : '')) : '',
+              lastMessageTime: lastMsg ? lastMsg.timestamp : null,
+              unreadCount
+            }));
+            // сортировка по времени последнего сообщения (сначала новые)
+            chats.sort((a, b) => (a.lastMessageTime > b.lastMessageTime ? -1 : 1));
+            resolve(chats);
+          })
+          .catch(reject);
+      }
+    );
+  });
+};
+
+// Пометить все сообщения от fromUserId к toUserId как прочитанные
+const markMessagesAsRead = (fromUserId, toUserId) => {
+  return new Promise((resolve, reject) => {
+    db.run(
+      'UPDATE messages SET read = 1 WHERE fromUserId = ? AND toUserId = ? AND read = 0',
+      [fromUserId, toUserId],
+      function(err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
       }
     );
   });
@@ -277,6 +363,8 @@ module.exports = {
   updateUserProfile,
   saveMessage,
   getMessagesBetweenUsers,
+  getChats,
+  markMessagesAsRead,
   createGroup,
   getUserGroups,
   getGroupMembers,
