@@ -229,11 +229,19 @@
 
     // ========== Загрузка чатов ==========
     async function loadChats() {
-      const res = await fetch('/api/chats', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const chats = await res.json();
-      renderChats(chats);
+      try {
+        const res = await fetch('/api/chats', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) {
+          console.error('Ошибка загрузки чатов:', res.status);
+          return;
+        }
+        const chats = await res.json();
+        renderChats(chats);
+      } catch (err) {
+        console.error('Ошибка сети при загрузке чатов:', err);
+      }
     }
 
     function renderChats(chats) {
@@ -518,6 +526,8 @@
         });
       }
       input.value = '';
+      // Обновить список чатов после отправки
+      setTimeout(() => loadChats(), 500); // небольшая задержка, чтобы сообщение успело сохраниться
     }
 
     // ========== Отправка фото/видео ==========
@@ -559,6 +569,7 @@
             type
           });
         }
+        setTimeout(() => loadChats(), 500);
       } else {
         alert('Ошибка загрузки файла');
       }
@@ -599,6 +610,7 @@
                 type: 'video_note'
               });
             }
+            setTimeout(() => loadChats(), 500);
           } else {
             alert('Ошибка загрузки кружка');
           }
@@ -767,6 +779,7 @@
     window.onload = () => {
       initSocket();
       switchTab('chats'); // начинаем с вкладки чатов
+      loadChats(); // сразу загружаем чаты
       if (window.innerWidth <= 768) {
         document.getElementById('sidebar').classList.add('show');
       }
