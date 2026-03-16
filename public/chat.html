@@ -18,6 +18,12 @@
       50% { transform: scale(1.2); }
       100% { transform: scale(1); }
     }
+    .empty-message {
+      text-align: center;
+      color: #888;
+      padding: 20px;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
@@ -36,7 +42,7 @@
         <div class="tab" onclick="switchTab('groups')" id="tabGroups">Группы</div>
       </div>
       <div class="search-box" id="searchBox">
-        <input type="text" id="searchInput" placeholder="Поиск..." oninput="search()">
+        <input type="text" id="searchInput" placeholder="Поиск по никнейму..." oninput="search()">
       </div>
       <div class="users-list" id="usersList" style="display: block;"></div>
       <div class="groups-list" id="groupsList" style="display: none;">
@@ -149,46 +155,12 @@
       document.getElementById('tabGroups').classList.toggle('active', tab === 'groups');
       document.getElementById('usersList').style.display = tab === 'users' ? 'block' : 'none';
       document.getElementById('groupsList').style.display = tab === 'groups' ? 'block' : 'none';
-      if (tab === 'users') loadUsers();
-      else loadGroups();
-    }
-
-    // ========== Загрузка пользователей ==========
-    async function loadUsers() {
-      const res = await fetch('/api/users?search=', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const users = await res.json();
-      renderUsers(users);
-    }
-
-    function renderUsers(users) {
-      const list = document.getElementById('usersList');
-      list.innerHTML = '';
-      users.forEach(u => {
-        if (u.id === user.id) return;
-        const div = document.createElement('div');
-        div.className = 'user-item';
-        div.dataset.id = u.id;
-        div.dataset.username = u.username;
-        div.onclick = () => selectUser(u.id, u.username);
-        
-        let avatarHtml = '';
-        if (u.avatar) {
-          avatarHtml = `<img src="${u.avatar}" class="user-avatar-img">`;
-        } else {
-          avatarHtml = `<div class="user-avatar">${u.username.charAt(0).toUpperCase()}</div>`;
-        }
-        
-        div.innerHTML = `
-          ${avatarHtml}
-          <div class="user-info">
-            <div class="user-name">${escapeHtml(u.username)}</div>
-            <div class="user-bio">${escapeHtml(u.bio || '')}</div>
-          </div>
-        `;
-        list.appendChild(div);
-      });
+      if (tab === 'groups') loadGroups();
+      else {
+        // При переходе на вкладку контактов очищаем список и поиск
+        document.getElementById('searchInput').value = '';
+        renderUsers([]);
+      }
     }
 
     // ========== Загрузка групп ==========
@@ -217,22 +189,64 @@
       });
     }
 
-    // ========== Поиск ==========
+    // ========== Поиск пользователей ==========
     let searchTimeout;
     function search() {
       clearTimeout(searchTimeout);
       const query = document.getElementById('searchInput').value.trim();
+      
+      if (query === '') {
+        // Если строка поиска пуста, очищаем список
+        renderUsers([]);
+        return;
+      }
+
       searchTimeout = setTimeout(async () => {
-        if (document.getElementById('tabUsers').classList.contains('active')) {
-          const res = await fetch(`/api/users?search=${encodeURIComponent(query)}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          const users = await res.json();
-          renderUsers(users);
-        } else {
-          loadGroups();
-        }
+        const res = await fetch(`/api/users?search=${encodeURIComponent(query)}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const users = await res.json();
+        renderUsers(users);
       }, 300);
+    }
+
+    function renderUsers(users) {
+      const list = document.getElementById('usersList');
+      list.innerHTML = '';
+      
+      if (users.length === 0) {
+        // Показываем сообщение, если никого не найдено
+        const emptyDiv = document.createElement('div');
+        emptyDiv.className = 'empty-message';
+        emptyDiv.innerText = 'Никто не найден. Попробуйте другой никнейм.';
+        list.appendChild(emptyDiv);
+        return;
+      }
+
+      users.forEach(u => {
+        if (u.id === user.id) return; // не показываем себя
+        const div = document.createElement('div');
+        div.className = 'user-item';
+        div.dataset.id = u.id;
+        div.dataset.username = u.username;
+        div.onclick = () => selectUser(u.id, u.username);
+        
+        let avatarHtml = '';
+        if (u.avatar) {
+          avatarHtml = `<img src="${u.avatar}" class="user-avatar-img">`;
+        } else {
+          avatarHtml = `<div class="user-avatar">${u.username.charAt(0).toUpperCase()}</div>`;
+        }
+        
+        div.innerHTML = `
+          ${avatarHtml}
+          <div class="user-info">
+            <div class="user-name">${escapeHtml(u.username)}</div>
+            <div class="user-bio">${escapeHtml(u.bio || '')}</div>
+          </div>
+        `;
+        list.appendChild(div);
+      });
     }
 
     // ========== Выбор пользователя ==========
@@ -562,10 +576,7 @@
         user.avatar = avatar;
         localStorage.setItem('user', JSON.stringify(user));
         hideProfileModal();
-        // Обновляем списки, если нужно
-        if (document.getElementById('tabUsers').classList.contains('active')) {
-          loadUsers();
-        }
+        // Обновляем списки, если нужно (но в контактах всё равно пусто)
       } else {
         alert('Ошибка сохранения профиля');
       }
@@ -647,7 +658,8 @@
 
     window.onload = () => {
       initSocket();
-      loadUsers();
+      // Показываем пустой список контактов
+      renderUsers([]);
       // Для мобильных устройств показываем боковую панель сразу
       if (window.innerWidth <= 768) {
         document.getElementById('sidebar').classList.add('show');
