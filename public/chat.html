@@ -648,6 +648,10 @@
     window.onload = () => {
       initSocket();
       loadUsers();
+      // Для мобильных устройств показываем боковую панель сразу
+      if (window.innerWidth <= 768) {
+        document.getElementById('sidebar').classList.add('show');
+      }
     };
   </script>
 </body>
