@@ -1,0 +1,4 @@
+node_modules/
+darkness.db
+.env
+uploads/
